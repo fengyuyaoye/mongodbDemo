@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+	<Properties>
+		<Property name="patternLayout">[%5p] [%d{yyyy-MM-dd HH:mm:ss}] [%X{traceId}] %c{2} - %m%n</Property>
+		<Property name="logdir">/logs/springBootDemo/</Property>
+	</Properties>
+
+	<Appenders>
+		<Console name="Console" target="SYSTEM_OUT">
+			<PatternLayout pattern="${patternLayout}" />
+		</Console>
+
+		<RollingFile name="infoAppender"
+			fileName="${logdir}/log.log" append="true"
+			filePattern="${logdir}/log.log.%d{yyyyMMdd}">
+			<PatternLayout>
+				<Pattern>${patternLayout}</Pattern>
+			</PatternLayout>
+			<Policies>
+				<TimeBasedTriggeringPolicy interval="24"
+					modulate="true" />
+				<SizeBasedTriggeringPolicy size="10MB" />
+			</Policies>
+		</RollingFile>
+
+	</Appenders>
+
+
+	<Loggers>
+		<logger name="com.inter3i.monitor.component.ScheduleJob"
+			level="info" additivity="false">
+			<appender-ref ref="importDataLog" />
+		</logger>
+		<root level="Info">
+			<appender-ref ref="Console" />
+			<appender-ref ref="infoAppender" />
+		</root>
+	</Loggers>
+
+</Configuration>
