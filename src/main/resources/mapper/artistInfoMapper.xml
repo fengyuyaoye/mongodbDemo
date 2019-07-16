@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper
+        namespace="com.example.feng.demo.dao.IArtistDAO">
+
+    <sql id="baseColumn">*
+	</sql>
+
+    <select id="selectMaxArtistId"
+            resultType="java.lang.Integer">
+        SELECT max(ArtistID) from artistinfo
+    </select>
+    
+    <select id="selectArtistIds"
+            resultType="java.lang.Integer">
+        SELECT ArtistID from artistinfo t where  t.ArtistID >= #{min} and t.ArtistID &lt; #{max}
+    </select>
+</mapper>

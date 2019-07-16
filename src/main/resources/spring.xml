@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans
+                http://www.springframework.org/schema/beans/spring-beans-4.1.xsd">
+
+	<bean id="cacheManager" class="com.atzy.cache.memcache.XMemcachedManager"  init-method="initConnection" scope="singleton">
+		<property name="name"  value="materiel"></property>
+		<property name="expiretimes"  value="${materiel.xmemcached.expiretime}"></property>
+		<property name="servers" value="${materiel.xmemcached.servers}"></property>
+		<property name="failureMode"   value="${materiel.xmemcached.failureMode}"></property>
+		<property name="builderConnectTimeout"  value="${materiel.xmemcached.builderConnectTimeout}"></property>
+		<property name="builderOpTimeout"  value="${materiel.xmemcached.builderOpTimeout}"></property>
+		<property name="connectionPoolSize"  value="${materiel.xmemcached.connectionPoolSize}"></property>
+	</bean>
+
+	<bean id="cacheManagerExt" class="com.atzy.materiel.service.cache.impl.CacheManagerImpl" init-method="init">
+		<property name="servers" value="${materiel.xmemcached.servers}"></property>
+		<property name="cacheManager"  ref="cacheManager"></property>
+	</bean>
+
+</beans>

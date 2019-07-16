@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.example.feng.demo.dao.IContentFileDAO">
+
+	<select id="selectMaxContentFileId"
+		resultType="java.lang.Integer">
+		SELECT max(ContentFileInfoID) from contentfileinfo
+	</select>
+
+	<select id="selectContentFileIds" resultType="java.lang.Integer">
+		SELECT
+		ContentFileInfoID from
+		contentfileinfo t where t.ContentFileInfoID >=
+		#{min} and t.ContentFileInfoID &lt;
+		#{max}
+	</select>
+</mapper>
