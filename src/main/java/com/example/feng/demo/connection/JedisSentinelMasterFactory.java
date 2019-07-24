@@ -1,6 +1,10 @@
 package com.example.feng.demo.connection;
 
 import java.net.URI;
+import java.security.SecureRandom;
+import java.sql.SQLOutput;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.HostnameVerifier;
@@ -25,6 +29,7 @@ import redis.clients.util.JedisURIHelper;
  * @since 2019/7/24
  */
 public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
+    private final int retryTimeWhenRetrieveSlave = 5;
     private final AtomicReference<HostAndPort> hostAndPort = new AtomicReference<HostAndPort>();
     private final int connectionTimeout;
     private final int soTimeout;
@@ -35,11 +40,12 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
     private final SSLSocketFactory sslSocketFactory;
     private SSLParameters sslParameters;
     private HostnameVerifier hostnameVerifier;
+    private final String masterName;
 
     public JedisSentinelMasterFactory(final String host, final int port, final int connectionTimeout,
         final int soTimeout, final String password, final int database, final String clientName, final boolean ssl,
         final SSLSocketFactory sslSocketFactory, final SSLParameters sslParameters,
-        final HostnameVerifier hostnameVerifier) {
+        final HostnameVerifier hostnameVerifier, String masterName) {
         this.hostAndPort.set(new HostAndPort(host, port));
         this.connectionTimeout = connectionTimeout;
         this.soTimeout = soTimeout;
@@ -50,16 +56,17 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
         this.sslSocketFactory = sslSocketFactory;
         this.sslParameters = sslParameters;
         this.hostnameVerifier = hostnameVerifier;
+        this.masterName = masterName;
     }
 
     public JedisSentinelMasterFactory(final URI uri, final int connectionTimeout, final int soTimeout,
         final String clientName, final boolean ssl, final SSLSocketFactory sslSocketFactory,
-        final SSLParameters sslParameters, final HostnameVerifier hostnameVerifier) {
+        final SSLParameters sslParameters, final HostnameVerifier hostnameVerifier, String masterName) {
         if (!JedisURIHelper.isValid(uri)) {
             throw new InvalidURIException(
                 String.format("Cannot open Redis connection due invalid URI. %s", uri.toString()));
         }
-
+        this.masterName = masterName;
         this.hostAndPort.set(new HostAndPort(uri.getHost(), uri.getPort()));
         this.connectionTimeout = connectionTimeout;
         this.soTimeout = soTimeout;
@@ -104,28 +111,71 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
 
     @Override
     public PooledObject<Jedis> makeObject() throws Exception {
+        long begin = System.currentTimeMillis();
+        final Jedis jedisSentinel = getASentinel();
+
+        List<Map<String, String>> slaves = jedisSentinel.sentinelSlaves(this.masterName);
+        if (slaves == null || slaves.isEmpty()) {
+            throw new JedisException(String.format("No valid slave for master: %s", this.masterName));
+        }
+
+        DefaultPooledObject<Jedis> result = tryToGetSlave(slaves);
+        long end = System.currentTimeMillis();
+        System.out.println("makeObject time: " + (end - begin));
+        if (null != result) {
+            return result;
+        } else {
+            throw new JedisException(String.format("No valid slave for master: %s, after try %d times.",
+                this.masterName, retryTimeWhenRetrieveSlave));
+        }
+
+    }
+
+    private DefaultPooledObject<Jedis> tryToGetSlave(List<Map<String, String>> slaves) {
+        SecureRandom sr = new SecureRandom();
+        int retry = retryTimeWhenRetrieveSlave;
+        while (retry >= 0) {
+            retry--;
+            int randomIndex = sr.nextInt(slaves.size());
+            String host = slaves.get(randomIndex).get("ip");
+            String port = slaves.get(randomIndex).get("port");
+            final Jedis jedisSlave = new Jedis(host, Integer.valueOf(port), connectionTimeout, soTimeout, ssl,
+                sslSocketFactory, sslParameters, hostnameVerifier);
+            try {
+                jedisSlave.connect();
+                if (null != this.password) {
+                    jedisSlave.auth(this.password);
+                }
+                if (database != 0) {
+                    jedisSlave.select(database);
+                }
+                if (clientName != null) {
+                    jedisSlave.clientSetname(clientName);
+                }
+                return new DefaultPooledObject<Jedis>(jedisSlave);
+
+            } catch (Exception e) {
+                jedisSlave.close();
+                slaves.remove(randomIndex);
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private Jedis getASentinel() {
         final HostAndPort hostAndPort = this.hostAndPort.get();
         final Jedis jedis = new Jedis(hostAndPort.getHost(), hostAndPort.getPort(), connectionTimeout, soTimeout, ssl,
             sslSocketFactory, sslParameters, hostnameVerifier);
 
         try {
             jedis.connect();
-            if (null != this.password) {
-                jedis.auth(this.password);
-            }
-            if (database != 0) {
-                jedis.select(database);
-            }
-            if (clientName != null) {
-                jedis.clientSetname(clientName);
-            }
         } catch (JedisException je) {
             jedis.close();
             throw je;
         }
-
-        return new DefaultPooledObject<>(jedis);
-
+        return jedis;
     }
 
     @Override

@@ -35,6 +35,7 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
     protected int database = Protocol.DEFAULT_DATABASE;
 
     protected String clientName;
+    private String masterName;
 
     protected Set<JedisSentinelMasterPool.MasterListener> masterListeners =
         new HashSet<JedisSentinelMasterPool.MasterListener>();
@@ -96,6 +97,7 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
         this.password = password;
         this.database = database;
         this.clientName = clientName;
+        this.masterName = masterName;
 
         HostAndPort master = initSentinels(sentinels, masterName);
         initPool(master);
@@ -118,7 +120,7 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
             currentHostMaster = master;
             if (factory == null) {
                 factory = new JedisSentinelMasterFactory(master.getHost(), master.getPort(), connectionTimeout,
-                    soTimeout, password, database, clientName, false, null, null, null);
+                    soTimeout, password, database, clientName, false, null, null, null, masterName);
                 initPool(poolConfig, factory);
             } else {
                 factory.setHostAndPort(currentHostMaster);
@@ -135,38 +137,34 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
 
     private HostAndPort initSentinels(Set<String> sentinels, final String masterName) {
 
-        HostAndPort sSentinel = null;
+        HostAndPort aSentinel = null;
         boolean sentinelAvailable = false;
 
-        log.info("Trying to find sSentinel from available Sentinels...");
+        log.info("Trying to find a valid sentinel from available Sentinels...");
 
-        for (String sentinel : sentinels) {
-            final HostAndPort hap = HostAndPort.parseString(sentinel);
+        for (String sentinelStr : sentinels) {
+            final HostAndPort hap = HostAndPort.parseString(sentinelStr);
 
-            log.fine("Connecting to Sentinel " + hap);
+            log.info("Connecting to Sentinel " + hap);
 
             Jedis jedis = null;
             try {
                 jedis = new Jedis(hap.getHost(), hap.getPort());
-
-                List<String> masterAddr = jedis.sentinelGetMasterAddrByName(masterName);
-
-                // connected to sentinel...
                 sentinelAvailable = true;
 
+                List<String> masterAddr = jedis.sentinelGetMasterAddrByName(masterName);
                 if (masterAddr == null || masterAddr.size() != 2) {
-                    log.warning("Can not get sSentinel addr, sSentinel name: " + masterName + ". Sentinel: " + hap + ".");
+                    log.info("Can not get master addr from sentinel, master name: " + masterName + ". Sentinel: "
+                            + hap + ".");
                     continue;
                 }
 
-                sSentinel = toHostAndPort(masterAddr);
-                log.fine("Found Redis sSentinel at " + sSentinel);
+                aSentinel = hap;
+                log.info("Found a Redis Sentinel at " + aSentinel);
                 break;
             } catch (JedisException e) {
-                // resolves #1036, it should handle JedisException there's another chance
-                // of raising JedisDataException
-                log.warning("Cannot get sSentinel address from sentinel running @ " + hap + ". Reason: " + e
-                    + ". Trying next one.");
+                log.warning("Cannot get master address from sentinel running @ " + hap + ". Reason: " + e
+                        + ". Trying next one.");
             } finally {
                 if (jedis != null) {
                     jedis.close();
@@ -174,31 +172,30 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
             }
         }
 
-        if (sSentinel == null) {
+        if (aSentinel == null) {
             if (sentinelAvailable) {
-                // can connect to sentinel, but sSentinel name seems to not
-                // monitored
+                // can connect to sentinel, but master name seems to not monitored
                 throw new JedisException(
-                    "Can connect to sentinel, but " + masterName + " seems to be not monitored...");
+                        "Can connect to sentinel, but " + masterName + " seems to be not monitored...");
             } else {
                 throw new JedisConnectionException(
-                    "All sentinels down, cannot determine where is " + masterName + " sSentinel is running...");
+                        "All sentinels down, cannot determine where is " + masterName + " master is running...");
             }
         }
 
-        log.info("Redis sSentinel running at " + sSentinel + ", starting Sentinel listeners...");
+        log.info("Found Redis sentinel running at " + aSentinel + ", starting Sentinel listeners...");
 
         for (String sentinel : sentinels) {
             final HostAndPort hap = HostAndPort.parseString(sentinel);
             JedisSentinelMasterPool.MasterListener masterListener =
-                new JedisSentinelMasterPool.MasterListener(masterName, hap.getHost(), hap.getPort());
+                    new JedisSentinelMasterPool.MasterListener(masterName, hap.getHost(), hap.getPort());
             // whether MasterListener threads are alive or not, process can be stopped
             masterListener.setDaemon(true);
             masterListeners.add(masterListener);
             masterListener.start();
         }
 
-        return sSentinel;
+        return aSentinel;
     }
 
     private HostAndPort toHostAndPort(List<String> getMasterAddrByNameResult) {
@@ -206,50 +203,6 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
         int port = Integer.parseInt(getMasterAddrByNameResult.get(1));
 
         return new HostAndPort(host, port);
-    }
-
-    @Override
-    public Jedis getResource() {
-        while (true) {
-            Jedis jedis = super.getResource();
-            jedis.setDataSource(this);
-
-            // get a reference because it can change concurrently
-            final HostAndPort master = currentHostMaster;
-            final HostAndPort connection = new HostAndPort(jedis.getClient().getHost(), jedis.getClient().getPort());
-
-            if (master.equals(connection)) {
-                // connected to the correct master
-                return jedis;
-            } else {
-                returnBrokenResource(jedis);
-            }
-        }
-    }
-
-    /**
-     * @deprecated starting from Jedis 3.0 this method will not be exposed. Resource cleanup should be done using @see
-     *             {@link redis.clients.jedis.Jedis#close()}
-     */
-    @Override
-    @Deprecated
-    public void returnBrokenResource(final Jedis resource) {
-        if (resource != null) {
-            returnBrokenResourceObject(resource);
-        }
-    }
-
-    /**
-     * @deprecated starting from Jedis 3.0 this method will not be exposed. Resource cleanup should be done using @see
-     *             {@link redis.clients.jedis.Jedis#close()}
-     */
-    @Override
-    @Deprecated
-    public void returnResource(final Jedis resource) {
-        if (resource != null) {
-            resource.resetState();
-            returnResourceObject(resource);
-        }
     }
 
     protected class MasterListener extends Thread {
