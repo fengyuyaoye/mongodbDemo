@@ -3,14 +3,18 @@ package com.example.feng.demo.connection;
 import java.net.URI;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocketFactory;
 
+import org.apache.catalina.Host;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.pool2.PooledObject;
 import org.apache.commons.pool2.PooledObjectFactory;
@@ -32,6 +36,7 @@ import redis.clients.util.JedisURIHelper;
 public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
     private final int retryTimeWhenRetrieveSlave = 5;
     private final AtomicReference<HostAndPort> hostAndPort = new AtomicReference<HostAndPort>();
+    private final CopyOnWriteArraySet<HostAndPort> hostAndPortSet = new CopyOnWriteArraySet<>();
     private final int connectionTimeout;
     private final int soTimeout;
     private final String password;
@@ -46,7 +51,7 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
     public JedisSentinelMasterFactory(final String host, final int port, final int connectionTimeout,
         final int soTimeout, final String password, final int database, final String clientName, final boolean ssl,
         final SSLSocketFactory sslSocketFactory, final SSLParameters sslParameters,
-        final HostnameVerifier hostnameVerifier, String masterName) {
+        final HostnameVerifier hostnameVerifier, String masterName, Set<String> sentinels) {
         this.hostAndPort.set(new HostAndPort(host, port));
         this.connectionTimeout = connectionTimeout;
         this.soTimeout = soTimeout;
@@ -58,6 +63,17 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
         this.sslParameters = sslParameters;
         this.hostnameVerifier = hostnameVerifier;
         this.masterName = masterName;
+        this.hostAndPortSet.addAll(getAllSentinelHostAndPorts(sentinels));
+    }
+
+    private Set<HostAndPort> getAllSentinelHostAndPorts(Set<String> sentinels) {
+        Set<HostAndPort> result = new HashSet<>();
+        if (CollectionUtils.isNotEmpty(sentinels)) {
+            for (String sentinel : sentinels) {
+                result.add(HostAndPort.parseString(sentinel));
+            }
+        }
+        return result;
     }
 
     public JedisSentinelMasterFactory(final URI uri, final int connectionTimeout, final int soTimeout,
@@ -173,17 +189,24 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
     }
 
     private Jedis getASentinel() {
-        final HostAndPort hostAndPort = this.hostAndPort.get();
-        final Jedis jedis = new Jedis(hostAndPort.getHost(), hostAndPort.getPort(), connectionTimeout, soTimeout, ssl,
-            sslSocketFactory, sslParameters, hostnameVerifier);
-
-        try {
-            jedis.connect();
-        } catch (JedisException je) {
-            jedis.close();
-            throw je;
+        for (int i = 0; i < 5; i++) {
+            final HostAndPort hostAndPort = this.hostAndPort.get();
+            final Jedis jedis = new Jedis(hostAndPort.getHost(), hostAndPort.getPort(), connectionTimeout, soTimeout, ssl,
+                    sslSocketFactory, sslParameters, hostnameVerifier);
+            try {
+                jedis.connect();
+            } catch (JedisException je) {
+                jedis.close();
+                hostAndPortSet.remove(hostAndPort);
+                for (HostAndPort hp : hostAndPortSet) {
+                    this.hostAndPort.set(hp);
+                    break;
+                }
+                continue;
+            }
+            return jedis;
         }
-        return jedis;
+        return null;
     }
 
     @Override

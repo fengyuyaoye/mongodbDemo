@@ -122,7 +122,7 @@ public class JedisSentinelMasterPool extends Pool<Jedis> {
             currentHostSentinel = sentinel;
             if (factory == null) {
                 factory = new JedisSentinelMasterFactory(sentinel.getHost(), sentinel.getPort(), connectionTimeout,
-                    soTimeout, password, database, clientName, false, null, null, null, masterName);
+                    soTimeout, password, database, clientName, false, null, null, null, masterName, sentinels);
                 initPool(poolConfig, factory);
             } else {
                 factory.setHostAndPort(currentHostSentinel);
