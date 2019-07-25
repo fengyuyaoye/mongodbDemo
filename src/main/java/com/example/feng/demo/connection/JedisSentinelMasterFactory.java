@@ -2,7 +2,7 @@ package com.example.feng.demo.connection;
 
 import java.net.URI;
 import java.security.SecureRandom;
-import java.sql.SQLOutput;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -11,6 +11,7 @@ import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocketFactory;
 
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.pool2.PooledObject;
 import org.apache.commons.pool2.PooledObjectFactory;
 import org.apache.commons.pool2.impl.DefaultPooledObject;
@@ -111,56 +112,63 @@ public class JedisSentinelMasterFactory implements PooledObjectFactory<Jedis> {
 
     @Override
     public PooledObject<Jedis> makeObject() throws Exception {
-        long begin = System.currentTimeMillis();
-        final Jedis jedisSentinel = getASentinel();
-
-        List<Map<String, String>> slaves = jedisSentinel.sentinelSlaves(this.masterName);
-        if (slaves == null || slaves.isEmpty()) {
-            throw new JedisException(String.format("No valid slave for master: %s", this.masterName));
-        }
-
-        DefaultPooledObject<Jedis> result = tryToGetSlave(slaves);
-        long end = System.currentTimeMillis();
-        System.out.println("makeObject time: " + (end - begin));
-        if (null != result) {
-            return result;
-        } else {
-            throw new JedisException(String.format("No valid slave for master: %s, after try %d times.",
-                this.masterName, retryTimeWhenRetrieveSlave));
-        }
-
+        List<HostAndPort> slaves = getSentinelSlaves();
+        return tryToGetSlave(slaves);
     }
 
-    private DefaultPooledObject<Jedis> tryToGetSlave(List<Map<String, String>> slaves) {
-        SecureRandom sr = new SecureRandom();
+    private List<HostAndPort> getSentinelSlaves() {
+        List<HostAndPort> result = new ArrayList<>();
+        Jedis jedisSentinel = null;
+        try {
+            jedisSentinel = getASentinel();
+            List<Map<String, String>> slaves = jedisSentinel.sentinelSlaves(this.masterName);
+            if (slaves == null || slaves.isEmpty()) {
+                throw new JedisException(String.format("No valid slave for master: %s", this.masterName));
+            }
+            if (CollectionUtils.isNotEmpty(slaves)) {
+                for (Map<String, String> slave : slaves) {
+                    String host = slave.get("ip");
+                    String port = slave.get("port");
+                    HostAndPort hostAndPort = new HostAndPort(host, Integer.valueOf(port));
+                    result.add(hostAndPort);
+                }
+            }
+            return result;
+        } finally {
+            if (jedisSentinel != null) {
+                jedisSentinel.close();
+            }
+        }
+    }
+
+    private DefaultPooledObject<Jedis> tryToGetSlave(List<HostAndPort> slaves) {
         int retry = retryTimeWhenRetrieveSlave;
-        while (retry >= 0) {
-            retry--;
+        while (retry-- > 0) {
+            SecureRandom sr = new SecureRandom();
             int randomIndex = sr.nextInt(slaves.size());
-            String host = slaves.get(randomIndex).get("ip");
-            String port = slaves.get(randomIndex).get("port");
-            final Jedis jedisSlave = new Jedis(host, Integer.valueOf(port), connectionTimeout, soTimeout, ssl,
-                sslSocketFactory, sslParameters, hostnameVerifier);
+            String host = slaves.get(randomIndex).getHost();
+            int port = slaves.get(randomIndex).getPort();
+
+            final Jedis jedis = new Jedis(host, port, connectionTimeout, soTimeout, ssl, sslSocketFactory,
+                sslParameters, hostnameVerifier);
             try {
-                jedisSlave.connect();
+                jedis.connect();
                 if (null != this.password) {
-                    jedisSlave.auth(this.password);
+                    jedis.auth(this.password);
                 }
                 if (database != 0) {
-                    jedisSlave.select(database);
+                    jedis.select(database);
                 }
                 if (clientName != null) {
-                    jedisSlave.clientSetname(clientName);
+                    jedis.clientSetname(clientName);
                 }
-                return new DefaultPooledObject<Jedis>(jedisSlave);
-
-            } catch (Exception e) {
-                jedisSlave.close();
+                return new DefaultPooledObject<Jedis>(jedis);
+            } catch (Exception je) {
+                jedis.close();
                 slaves.remove(randomIndex);
                 continue;
             }
         }
-
         return null;
     }
 
