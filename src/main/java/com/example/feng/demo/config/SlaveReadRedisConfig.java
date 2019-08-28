@@ -9,9 +9,11 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisNode;
 import org.springframework.data.redis.connection.RedisSentinelConfiguration;
 import org.springframework.data.redis.connection.jedis.JedisClientConfiguration;
-import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+
+import com.example.feng.demo.connection.JedisSentinelMasterConnectionFactory;
+import com.example.feng.demo.connection.JedisSentinelSlaveConnectionFactory;
 
 import redis.clients.jedis.JedisPoolConfig;
 
@@ -19,21 +21,15 @@ import redis.clients.jedis.JedisPoolConfig;
  * @author Kevin Xiao
  * @version 1.0
  * @Description TODO
- * @since 2019/7/17
+ * @since 2019/7/24
  */
 //@Configuration
-public class WriteRedisConfig {
-    /*@Value("${spring.redis.host}")
-    private String redisHost;
-    
-    @Value("${spring.redis.port}")
-    private int redisPort;*/
-
+public class SlaveReadRedisConfig {
     @Value("${spring.redis.timeout}")
     private int redisTimeout;
 
-    /*@Value("${spring.redis.password}")
-    private String redisAuth;*/
+    @Value("${spring.redis.connection.timeout:2000}")
+    private int connectionTimeout;
 
     @Value("${spring.redis.database}")
     private int redisDb;
@@ -56,19 +52,18 @@ public class WriteRedisConfig {
     @Value("${spring.redis.sentinel.master}")
     private String master;
 
-    public RedisConnectionFactory connectionFactory() {
+    private RedisConnectionFactory connectionSlaveFactory() {
         JedisPoolConfig poolConfig = new JedisPoolConfig();
         poolConfig.setMaxTotal(maxActive);
         poolConfig.setMaxIdle(maxIdle);
         poolConfig.setMaxWaitMillis(maxWait);
         poolConfig.setMinIdle(minIdle);
         JedisClientConfiguration clientConfig = JedisClientConfiguration.builder().usePooling().poolConfig(poolConfig)
-            .and().readTimeout(Duration.ofMillis(redisTimeout)).build();
+            .and().readTimeout(Duration.ofMillis(redisTimeout)).connectTimeout(Duration.ofMillis(connectionTimeout)).build();
 
-        // 单点redis
-        // RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
         // 哨兵redis
         RedisSentinelConfiguration redisConfig = new RedisSentinelConfiguration();
+        redisConfig.setDatabase(redisDb);
         redisConfig.setMaster(master);
         String[] sentinels = sentinelNodes.split(",");
         for (String sentinel : sentinels) {
@@ -77,29 +72,18 @@ public class WriteRedisConfig {
             redisConfig.sentinel(node);
         }
 
-        // 集群redis
-        // RedisClusterConfiguration redisConfig = new RedisClusterConfiguration();
-        /*redisConfig.setHostName(redisHost);
-        redisConfig.setPassword(RedisPassword.of(redisAuth));
-        redisConfig.setPort(redisPort);*/
-        redisConfig.setDatabase(redisDb);
-
-        JedisConnectionFactory connectionFactory = new JedisConnectionFactory(redisConfig, clientConfig);
+        JedisSentinelMasterConnectionFactory connectionFactory =
+            new JedisSentinelMasterConnectionFactory(redisConfig, clientConfig);
+        /*JedisSentinelSlaveConnectionFactory connectionFactory =
+                new JedisSentinelSlaveConnectionFactory(redisConfig, clientConfig);*/
         connectionFactory.afterPropertiesSet();
         return connectionFactory;
     }
 
-//    @Bean(name = "writeRedisTemplate")
-    public RedisTemplate writeRedisTemplate() {
+    @Bean(name = "slaveReadRedisTemplate")
+    public RedisTemplate slaveReadRedisTemplate() {
         RedisTemplate template = new StringRedisTemplate();
-        template.setConnectionFactory(connectionFactory());
-        return template;
-    }
-
-    @Bean(name = "write2RedisTemplate")
-    public RedisTemplate write2RedisTemplate() {
-        RedisTemplate template = new StringRedisTemplate();
-        template.setConnectionFactory(connectionFactory());
+        template.setConnectionFactory(connectionSlaveFactory());
         return template;
     }
 }
